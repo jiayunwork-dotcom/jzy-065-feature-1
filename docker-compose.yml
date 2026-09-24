@@ -1,0 +1,56 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: webster
+      POSTGRES_PASSWORD: webster
+      POSTGRES_DB: webster_timing
+    ports:
+      - "5432:5432"
+    volumes:
+      pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U webster -d webster_timing"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      target: runtime
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      STORE: postgres
+      PGHOST: db
+      PGPORT: "5432"
+      PGUSER: webster
+      PGPASSWORD: webster
+      PGDATABASE: webster_timing
+      PORT: "8080"
+    ports:
+      - "8080:8080"
+
+  # Full test suite (including PostgreSQL integration) against the same db.
+  #   docker compose --profile tests build tests
+  #   docker compose --profile tests run --rm tests
+  tests:
+    profiles: ["tests"]
+    build:
+      context: .
+      target: test
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      RUN_PG_TESTS: "1"
+      PGHOST: db
+      PGPORT: "5432"
+      PGUSER: webster
+      PGPASSWORD: webster
+      PGDATABASE: webster_timing
+
+volumes:
+  pgdata:

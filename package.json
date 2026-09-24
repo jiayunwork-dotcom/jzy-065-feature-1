@@ -1,0 +1,25 @@
+{
+  "name": "webster-timing-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Isolated intersection Webster signal timing HTTP service (flow ratios, cycle length, green split, uniform delay, saturation guards, cycle scan, scenario archive)",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json --noEmit",
+    "test": "vitest run",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "fastify": "^5.0.0",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.10",
+    "@types/pg": "^8.11.10",
+    "typescript": "^5.6.2",
+    "vitest": "^2.1.3"
+  }
+}
