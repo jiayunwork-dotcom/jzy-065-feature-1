@@ -18,6 +18,21 @@ export const OVERSATURATION_Y_LIMIT = 1 - OVERSATURATION_MARGIN; // 0.99
  */
 export const X_EPSILON = 1e-9;
 
+/** Minutes in a day; time-of-day plan periods are expressed in minutes after midnight. */
+export const DAY_MINUTES = 24 * 60;
+
+/**
+ * Default per-cycle step (seconds) a controller may move the cycle length by
+ * when transitioning between two adjacent time-of-day periods.
+ */
+export const DEFAULT_MAX_CYCLE_STEP = 10;
+
+/**
+ * Epsilon for the transition step-count computation: absorbs floating-point
+ * noise when |toCycle - fromCycle| is an exact multiple of the max step.
+ */
+export const TRANSITION_STEP_EPSILON = 1e-9;
+
 export function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v);
 }

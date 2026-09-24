@@ -127,3 +127,153 @@ export interface ScenarioRecord {
   createdAt: string;
   updatedAt: string;
 }
+
+/* ------------------------------------------------------------------ */
+/* Time-of-day day plans                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Channelization-bound phase data, constant across the whole day: saturation
+ * flow, optional minimum green, optional label. Arrival flow is NOT here — it
+ * belongs to each period.
+ */
+export interface SharedPhaseInput {
+  /** saturation flow, vehicles/hour (> 0) */
+  s: number;
+  /** optional minimum effective green, seconds (>= 0) */
+  minGreen?: number;
+  label?: string;
+}
+
+/**
+ * One time-of-day period. Times are minutes after midnight; periods must tile
+ * [0, 1440] seamlessly in array order (validated before any solving).
+ */
+export interface PlanPeriodInput {
+  /** period start, minutes after midnight, 0 <= start < 1440 */
+  start: number;
+  /** period end, minutes after midnight, 0 < end <= 1440, end > start */
+  end: number;
+  /** arrival flow per phase (veh/h), one entry per shared phase, same order */
+  q: number[];
+  label?: string;
+}
+
+/** Day plan definition: what gets archived. Never any computed results. */
+export interface DayPlanInput {
+  /** total lost time per cycle, seconds (> 0), constant all day */
+  lostTime: number;
+  /** shared per-phase channelization data (s, minGreen, label) */
+  phases: SharedPhaseInput[];
+  /** contiguous periods covering exactly one day */
+  periods: PlanPeriodInput[];
+}
+
+/** Persisted day-plan definition (no results are stored). */
+export interface PlanRecord {
+  name: string;
+  lostTime: number;
+  phases: SharedPhaseInput[];
+  periods: PlanPeriodInput[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type PeriodPlanStatus = 'ok' | 'error';
+
+/**
+ * One period's slice of the day plan. A period whose own traffic is
+ * infeasible (oversaturated Y, a saturated phase, infeasible minimum greens)
+ * is marked 'error' with the structured reason — the rest of the plan still
+ * solves.
+ */
+export interface PeriodPlanResult {
+  index: number;
+  start: number;
+  end: number;
+  label: string | null;
+  status: PeriodPlanStatus;
+  /** present only when status === 'ok' */
+  timing?: TimingResult;
+  /** present only when status === 'error' */
+  error?: ErrorDetailView;
+}
+
+export interface ErrorDetailView {
+  code: string;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+export type TransitionStatus = 'feasible' | 'infeasible' | 'unavailable';
+
+/**
+ * Which demand regime the transition cycles are solved against. Always the
+ * arriving ('target') period: the controller runs the transition at the start
+ * of the new period, so every intermediate cycle must stand up under the
+ * demand it is transitioning INTO.
+ */
+export type TransitionFlowBasis = 'target';
+
+/** One cycle of a transition path, solved fresh at its own cycle length. */
+export interface TransitionCycleView {
+  /** 0 = the departing period's own cycle; 1..steps are the transition cycles */
+  step: number;
+  role: 'start' | 'transition';
+  cycle: number;
+  timing: TimingResult;
+}
+
+/** Why a transition cannot be walked: the first cycle that breaks, and where. */
+export interface TransitionFailure {
+  /** step index whose cycle could not serve the arriving period's demand */
+  step: number;
+  /** the offending intermediate cycle length, seconds */
+  cycle: number;
+  code: string;
+  message: string;
+  /** present for per-phase failures (e.g. PHASE_SATURATED) */
+  phaseIndex?: number;
+  label?: string | null;
+}
+
+/**
+ * Cycle-length transition path between two adjacent periods.
+ *
+ * 'feasible'    — cycles[0] is the start cycle, cycles[steps] lands exactly on
+ *                 the target cycle; every step moves at most maxStep seconds
+ *                 and every transition cycle is a solved, balanced, unsaturated
+ *                 timing under the arriving period's demand.
+ * 'infeasible'  — some transition cycle would saturate a phase; cycles holds
+ *                 the validated prefix and failure pinpoints the breaking step.
+ * 'unavailable' — an endpoint period has no solution, so there is nothing to
+ *                 walk from/to.
+ */
+export interface TransitionResult {
+  fromPeriod: number;
+  toPeriod: number;
+  fromCycle: number | null;
+  toCycle: number | null;
+  maxStep: number;
+  flowBasis: TransitionFlowBasis;
+  status: TransitionStatus;
+  /** planned number of cycle changes (0 when the cycles already match) */
+  steps: number | null;
+  cycles: TransitionCycleView[];
+  failure?: TransitionFailure;
+  /** present when status === 'unavailable' */
+  reason?: string;
+}
+
+/** Full solved day plan: per-period timings plus every adjacent transition. */
+export interface DayPlanResult {
+  lostTime: number;
+  maxCycleStep: number;
+  periods: PeriodPlanResult[];
+  /**
+   * One transition per adjacent pair, in time order. For n >= 2 periods there
+   * are exactly n transitions: the last one crosses midnight from the final
+   * period back to the first (the plan repeats daily).
+   */
+  transitions: TransitionResult[];
+}

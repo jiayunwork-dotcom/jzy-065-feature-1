@@ -1,5 +1,5 @@
-import type { ScenarioRecord } from '../domain/types';
-import type { ScenarioStore } from './types';
+import type { PlanRecord, ScenarioRecord } from '../domain/types';
+import type { PlanStore, ScenarioStore } from './types';
 
 /**
  * In-memory archive, used by unit/HTTP tests so the web layer needs no
@@ -31,6 +31,52 @@ export class MemoryScenarioStore implements ScenarioStore {
   }
 
   async list(): Promise<ScenarioRecord[]> {
+    return [...this.rows.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async delete(name: string): Promise<boolean> {
+    return this.rows.delete(name);
+  }
+
+  async close(): Promise<void> {
+    this.rows.clear();
+  }
+}
+
+/**
+ * In-memory day-plan archive, same isolation properties as the scenario
+ * store above. Definitions only; nothing computed is ever written here.
+ */
+export class MemoryPlanStore implements PlanStore {
+  private readonly rows = new Map<string, PlanRecord>();
+
+  async upsert(
+    name: string,
+    definition: {
+      lostTime: number;
+      phases: PlanRecord['phases'];
+      periods: PlanRecord['periods'];
+    },
+  ): Promise<PlanRecord> {
+    const now = new Date().toISOString();
+    const existing = this.rows.get(name);
+    const record: PlanRecord = {
+      name,
+      lostTime: definition.lostTime,
+      phases: definition.phases,
+      periods: definition.periods,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+    this.rows.set(name, record);
+    return record;
+  }
+
+  async get(name: string): Promise<PlanRecord | null> {
+    return this.rows.get(name) ?? null;
+  }
+
+  async list(): Promise<PlanRecord[]> {
     return [...this.rows.values()].sort((a, b) => a.name.localeCompare(b.name));
   }
 

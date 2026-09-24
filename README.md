@@ -1,12 +1,14 @@
 # Webster Isolated-Intersection Timing Service
 
 An HTTP backend that solves **analytical signal timing for a single isolated
-intersection** with the Webster formulas. No network simulation, no UI. It is
-called by upstream signal-timing tools.
+intersection** with the Webster formulas — both for a single instant and for a
+**full time-of-day plan** with cycle-length transitions between adjacent
+periods. No network simulation, no UI. It is called by upstream signal-timing
+tools.
 
 * Node.js 20 + TypeScript (strict)
 * Fastify 5 web layer
-* PostgreSQL 16 for the named scenario archive
+* PostgreSQL 16 for the named scenario & day-plan archives
 * Docker Compose: database + API in one build; automated tests (including the
   PG integration tests) run via the `tests` profile
 

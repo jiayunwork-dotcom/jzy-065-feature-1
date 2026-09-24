@@ -1,7 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { PgScenarioStore } from './postgres';
-import { demoDefinition, assertDemoSane, DEMO_SCENARIO_NAME } from './seed';
-import type { ScenarioStore } from './types';
+import { PgScenarioStore, PgPlanStore } from './postgres';
+import {
+  demoDefinition,
+  demoPlanDefinition,
+  assertDemoSane,
+  DEMO_SCENARIO_NAME,
+  DEMO_PLAN_NAME,
+} from './seed';
+import type { PlanStore, ScenarioStore } from './types';
 
 /**
  * PostgreSQL 16 integration test.
@@ -49,5 +55,58 @@ describe.skipIf(!enabled)('PgScenarioStore against PostgreSQL 16', () => {
     const removed = await store.delete(DEMO_SCENARIO_NAME);
     expect(removed).toBe(true);
     expect(await store.get(DEMO_SCENARIO_NAME)).toBeNull();
+  });
+});
+
+describe.skipIf(!enabled)('PgPlanStore against PostgreSQL 16', () => {
+  let store: PlanStore;
+
+  beforeAll(async () => {
+    store = await PgPlanStore.create({ connectRetries: 30 });
+  });
+
+  afterAll(async () => {
+    await store.close();
+  });
+
+  it('persists, updates and deletes named day plans (definitions only)', async () => {
+    const demo = demoPlanDefinition();
+    await store.upsert(DEMO_PLAN_NAME, {
+      lostTime: demo.lostTime,
+      phases: demo.phases,
+      periods: demo.periods,
+    });
+    const fetched = await store.get(DEMO_PLAN_NAME);
+    expect(fetched).not.toBeNull();
+    expect(fetched!.lostTime).toBe(12);
+    expect(fetched!.phases).toHaveLength(4);
+    expect(fetched!.periods).toHaveLength(6);
+    expect(fetched!.periods[1]!.q).toEqual([350, 110, 90, 40]);
+    expect(fetched!.periods[1]!.start).toBe(360);
+    // nothing computed is persisted: the record is the bare definition
+    expect(fetched).not.toHaveProperty('timing');
+    expect(fetched).not.toHaveProperty('transitions');
+
+    const listed = await store.list();
+    expect(listed.some((p) => p.name === DEMO_PLAN_NAME)).toBe(true);
+
+    const modified = demoPlanDefinition();
+    modified.periods = modified.periods.map((p, i) =>
+      i === 2 ? { ...p, q: [700, 220, 180, 90] } : p,
+    );
+    await store.upsert(DEMO_PLAN_NAME, {
+      lostTime: modified.lostTime,
+      phases: modified.phases,
+      periods: modified.periods,
+    });
+    const updated = (await store.get(DEMO_PLAN_NAME))!;
+    expect(updated.periods[2]!.q).toEqual([700, 220, 180, 90]);
+    expect(new Date(updated.updatedAt).getTime()).toBeGreaterThanOrEqual(
+      new Date(fetched!.createdAt).getTime(),
+    );
+
+    const removed = await store.delete(DEMO_PLAN_NAME);
+    expect(removed).toBe(true);
+    expect(await store.get(DEMO_PLAN_NAME)).toBeNull();
   });
 });
