@@ -1,12 +1,14 @@
 # Webster Isolated-Intersection Timing Service
 
 An HTTP backend that solves **analytical signal timing for a single isolated
-intersection** with the Webster formulas. No network simulation, no UI. It is
+intersection** with the Webster formulas — both for one instant and for a
+**whole day** of changing demand, including the **transition cycles** walked
+between adjacent time-of-day periods. No network simulation, no UI. It is
 called by upstream signal-timing tools.
 
 * Node.js 20 + TypeScript (strict)
 * Fastify 5 web layer
-* PostgreSQL 16 for the named scenario archive
+* PostgreSQL 16 for the named scenario and day-plan archives
 * Docker Compose: database + API in one build; automated tests (including the
   PG integration tests) run via the `tests` profile
 
@@ -57,18 +59,66 @@ when minimum greens capture usable time from the other phases.
 ## Modules
 
 ```
-src/domain    types, structured errors, thresholds, request validation
-src/timing    flowRatios · cycle (C0) · greenSplit · delay · saturation · timing orchestrator
-src/scan      fresh per-cycle evaluation + interruptible ScanManager
-src/store     ScenarioStore interface, MemoryScenarioStore, PgScenarioStore (16), seed
-src/http      Fastify routes (timing, evaluate, scans, scenarios, health)
-src/app.ts    application builder (web layer is only an adapter)
-src/server.ts entrypoint: DB connect/retry, migrate, seed, listen
+src/domain      types, structured errors, thresholds, request validation
+src/timing      flowRatios · cycle (C0) · greenSplit · delay · saturation · timing orchestrator
+src/scan        fresh per-cycle evaluation + interruptible ScanManager
+src/plan        day-plan types validation (clock tiling) · per-segment independent solving
+src/transition  sequence (pure cycle-step arithmetic) · transition (per-cycle fresh timing)
+src/store       ScenarioStore + DailyPlanStore, each with Memory + Pg (16) implementations, seed
+src/http        Fastify routes (timing, evaluate, scans, scenarios, plans, health)
+src/app.ts      application builder (web layer is only an adapter)
+src/server.ts   entrypoint: DB connect/retry, migrate, seed both archives, listen
 ```
 
 The timing chain uses **one** arrival-rate array: the same `q` builds `y`,
-`saturation` and the `q·d` rate. The structure makes “timing with one q set,
-delay with another” impossible.
+`saturation` and the `q·d` rate. The structure makes "timing with one q set,
+delay with another" impossible. The transition step arithmetic
+(`src/transition/sequence.ts`) is deliberately a separate, formula-free file:
+it never imports the timing chain, and the physical feasibility of each
+walked cycle lives in `src/transition/transition.ts`.
+
+## Daily time-of-day plans and period transitions
+
+A plan is a day-long list of back-to-back segments (`"HH:MM"` clocks from
+`00:00` to `24:00`). Canalisation quantities — saturation flows, minimum
+greens, total lost time — are defined once for the day; **arrival rates are
+given per segment**. Every segment is solved independently through the same
+Webster chain. The timeline must tile the day exactly: a gap, an overlap, a
+plan that does not start at midnight or does not end at 24:00 is rejected
+**before solving** with the offending pair of segments named
+(`SEGMENT_GAP` / `SEGMENT_OVERLAP` / `DAY_NOT_COVERED`).
+
+One segment's demand being oversaturated (or unservable at its own optimum)
+does not scrap the plan: that segment returns `status: "error"` with its
+code, segment index and context; every other segment still solves, and the
+transitions touching a broken segment are reported as `skipped`.
+
+### Transition cycles
+
+Between adjacent periods the controller cannot truncate a running cycle, so
+the cycle length walks from the departing period's optimum to the arriving
+period's optimum one cycle at a time, changing by at most
+`maxCycleAdjustment` seconds per cycle. The walk (`cycleSequence`) is the
+**shortest** strictly monotone walk:
+
+* `n = ceil(|C_target − C_from| / maxAdjustment)` steps;
+* every step moves at most the budget; the final step lands **exactly** on
+  the target — no overshoot-and-correct, no accumulated float drift;
+* equal endpoints produce the single-cycle walk.
+
+**Every walked cycle is itself solved fresh at its own length.** The demand
+chosen for that solve is the **departing segment's arrival rates**: the walk
+is executed in the tail of that period, before the time-of-day boundary, so
+the vehicles arriving during those cycles are still the departing period's
+demand. Each walked cycle re-allocates green for its length and must satisfy
+`Σg + L = C` within `BALANCE_TOLERANCE` and keep every phase below
+saturation. The final walked cycle length equals the arriving period's
+optimum; at the boundary the pattern switches to the arriving flows on the
+first full cycle. If any intermediate cycle pushes a phase to saturation the
+whole transition is `infeasible`, and the response stops at **that step**,
+naming the step number and the phase — an infeasible walk can sit well
+inside the walk when minimum greens bind and only becomes survivable at
+longer cycles (e.g. leaving a heavy period while shortening).
 
 ## Running
 
@@ -84,7 +134,9 @@ npm run build && STORE=memory node dist/server.js
 
 On startup the service waits for PostgreSQL, applies the idempotent schema and
 seeds `demo-four-phase`: four phases, `Y = 0.70`, `L = 12 s`,
-`C0 = 76.67 s` (literature 50–80 s range).
+`C0 = 76.67 s` (literature 50–80 s range). It also seeds
+`demo-day-plan`: five segments over the day whose every segment solves and
+whose transition walks are all feasible at a 20 s/cycle budget.
 
 ## API
 
@@ -132,6 +184,45 @@ POST   /api/scenarios/:name/scan      body {"cycles": [...]}; recompute sweep
 ```
 Only definitions persist; every fetch re-solves from the stored q/s/L.
 
+### Daily plans
+```
+POST   /api/plans/solve                    body {lostTime, phases[], segments[], maxCycleAdjustment}
+PUT    /api/plans/:name                    store the plan DEFINITION (timeline + per-segment flows)
+GET    /api/plans                          list
+GET    /api/plans/:name                    fetch the definition
+DELETE /api/plans/:name                    remove
+POST   /api/plans/:name/solve              body {"maxCycleAdjustment": n}; re-solve the whole day
+```
+
+The solve response carries, per segment: `start`, `end`, `label`, `status`
+and — when `ok` — the full single-case result (`Y`, `optimalCycle`, `cycle`,
+per-phase `g/lambda/x/uniformDelay/delayRate`, `greenBalanceResidual`,
+`totalDelayRate`), otherwise an `error`. Each entry of `transitions[]` gives
+the two segment indices, both endpoint cycles, `status`
+(`feasible | infeasible | skipped`) and a `cycles[]` list where **every
+entry is its own fresh timing result at that cycle length** (under the
+departing segment's flows), or the first failing cycle with its `error`
+(step, cycle, phase index). `maxCycleAdjustment` is an operating parameter
+of a solve, not part of the stored definition: the same archived plan can be
+re-walked with different budgets, and nothing computed is ever persisted.
+
+A plan body looks like:
+```json
+{
+  "lostTime": 10,
+  "maxCycleAdjustment": 20,
+  "phases": [
+    {"s": 1800, "label": "NB/SB through"},
+    {"s": 1800, "label": "EB/WB through"}
+  ],
+  "segments": [
+    {"start": "00:00", "end": "06:00", "label": "night", "flows": [180, 90]},
+    {"start": "06:00", "end": "10:00", "label": "am peak", "flows": [792, 306]},
+    {"start": "10:00", "end": "24:00", "label": "rest", "flows": [450, 360]}
+  ]
+}
+```
+
 ### Health
 `GET /health` (liveness), `GET /ready` (database reachable).
 
@@ -150,3 +241,20 @@ Only definitions persist; every fetch re-solves from the stored q/s/L.
 * scan points are recomputed per cycle, short cycles marked, cancellation
   never publishes a partial curve, parallel scans/cases isolated
 * `delayRate` uses the same `q` as the flow ratio
+* raising one segment's arrival flows raises that segment's `C0` and delay
+  and leaves every other segment bit-for-bit identical
+* a gap, an overlap or a day not starting/ending on the boundary is a 400
+  before any formula runs, naming the pair of segments
+* an oversaturated / zero-flow segment is marked in place; other segments
+  solve and transitions touching the broken segment are skipped
+* transition walks have the minimum step count, every step within the budget
+  and both endpoints exactly equal to the two optimal cycles; a wider cycle
+  gap at a fixed budget produces more steps
+* every walked cycle closes `Σg + L = C` and stays below saturation when
+  re-solved fresh at its own length with the departing segment's flows —
+  checked by an independent solve, not just by inspecting the number list
+* a step that saturates a phase marks the transition infeasible at exactly
+  that step and phase; the failing step moves with the step budget, and
+  neighbouring feasible transitions are still returned
+* archived plans store only the definition: re-solving with a different
+  `maxCycleAdjustment` produces different walks from the same record

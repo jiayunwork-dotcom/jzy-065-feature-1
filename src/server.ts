@@ -1,34 +1,48 @@
 import { buildApp } from './app';
 import { PgScenarioStore } from './store/postgres';
 import { MemoryScenarioStore } from './store/memory';
+import { PgDailyPlanStore } from './store/planPostgres';
+import { MemoryDailyPlanStore } from './store/planMemory';
 import type { ScenarioStore } from './store/types';
+import type { DailyPlanStore } from './store/planTypes';
 import { demoDefinition } from './store/seed';
+import { demoPlanDefinition } from './store/planSeed';
 
 /**
  * Service entry.
  *
  * Storage:
- *   STORE=memory     in-memory archive (default, also used by unit tests)
- *   STORE=postgres   PostgreSQL 16 archive (docker compose default)
+ *   STORE=memory     in-memory archives (default, also used by unit tests)
+ *   STORE=postgres   PostgreSQL 16 archives (docker compose default)
  */
 async function main(): Promise<void> {
   const storeType = (process.env.STORE ?? 'memory').toLowerCase();
   let store: ScenarioStore;
+  let planStore: DailyPlanStore;
 
   if (storeType === 'postgres') {
     store = await PgScenarioStore.create();
+    planStore = await PgDailyPlanStore.create();
   } else {
     store = new MemoryScenarioStore();
+    planStore = new MemoryDailyPlanStore();
   }
 
   const app = await buildApp({
     store,
+    planStore,
     logger: process.env.LOG_LEVEL ? { level: process.env.LOG_LEVEL } : false,
   });
 
-  // Everyone who starts the service can sanity-check against the seed case.
+  // Everyone who starts the service can sanity-check against the seed cases.
   const demo = demoDefinition();
   await store.upsert(demo.name, { phases: demo.phases, lostTime: demo.lostTime });
+  const demoPlan = demoPlanDefinition();
+  await planStore.upsert(demoPlan.name, {
+    lostTime: demoPlan.lostTime,
+    phases: demoPlan.phases,
+    segments: demoPlan.segments,
+  });
 
   const port = Number(process.env.PORT ?? 8080);
   const host = process.env.HOST ?? '0.0.0.0';
@@ -39,6 +53,7 @@ async function main(): Promise<void> {
     app.log.info('shutting down');
     await app.close();
     await store.close();
+    await planStore.close();
     process.exit(0);
   };
   process.on('SIGTERM', shutdown);

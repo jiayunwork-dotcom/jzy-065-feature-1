@@ -1,10 +1,13 @@
 import { Pool, type PoolConfig } from 'pg';
 import type { PhaseInput, ScenarioRecord } from '../domain/types';
 import type { ScenarioStore } from './types';
+import { waitForConnection } from './pgConnect';
 
 export interface PgConfig extends PoolConfig {
   /** connection attempts before giving up (waits 1s between attempts) */
   connectRetries?: number;
+  /** use an existing pool instead of creating one (shared archives) */
+  pool?: Pool;
 }
 
 interface ScenarioRow {
@@ -31,13 +34,15 @@ CREATE TABLE IF NOT EXISTS scenarios (
  */
 export class PgScenarioStore implements ScenarioStore {
   private readonly pool: Pool;
+  private readonly ownsPool: boolean;
 
-  private constructor(pool: Pool) {
+  private constructor(pool: Pool, ownsPool: boolean) {
     this.pool = pool;
+    this.ownsPool = ownsPool;
   }
 
   static async create(config: PgConfig = {}): Promise<PgScenarioStore> {
-    const pool = new Pool({
+    const pool = config.pool ?? new Pool({
       host: config.host ?? process.env.PGHOST ?? 'localhost',
       port: config.port ?? Number(process.env.PGPORT ?? 5432),
       user: config.user ?? process.env.PGUSER ?? 'webster',
@@ -45,9 +50,11 @@ export class PgScenarioStore implements ScenarioStore {
       database: config.database ?? process.env.PGDATABASE ?? 'webster_timing',
       max: config.max ?? 10,
     });
-    const retries = config.connectRetries ?? 30;
-    await waitForConnection(pool, retries);
-    const store = new PgScenarioStore(pool);
+    if (!config.pool) {
+      const retries = config.connectRetries ?? 30;
+      await waitForConnection(pool, retries);
+    }
+    const store = new PgScenarioStore(pool, !config.pool);
     await store.migrate();
     return store;
   }
@@ -95,7 +102,9 @@ export class PgScenarioStore implements ScenarioStore {
   }
 
   async close(): Promise<void> {
-    await this.pool.end();
+    if (this.ownsPool) {
+      await this.pool.end();
+    }
   }
 }
 
@@ -111,21 +120,4 @@ function mapRow(row: ScenarioRow): ScenarioRecord {
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
   };
-}
-
-async function waitForConnection(pool: Pool, retries: number): Promise<void> {
-  let lastErr: unknown;
-  for (let attempt = 1; attempt <= retries; attempt += 1) {
-    try {
-      await pool.query('SELECT 1');
-      return;
-    } catch (err) {
-      lastErr = err;
-      await new Promise((r) => setTimeout(r, 1000));
-    }
-  }
-  await pool.end();
-  throw new Error(
-    `database not reachable after ${retries} attempts: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`,
-  );
 }

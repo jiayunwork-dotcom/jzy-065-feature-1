@@ -3,29 +3,37 @@ import { TimingError } from './domain/errors';
 import { timingRoutes } from './http/timingRoutes';
 import { scanRoutes } from './http/scanRoutes';
 import { scenarioRoutes } from './http/scenarioRoutes';
+import { planRoutes } from './http/planRoutes';
 import { healthRoutes } from './http/healthRoutes';
 import type { ScenarioStore } from './store/types';
+import type { DailyPlanStore } from './store/planTypes';
+import { MemoryDailyPlanStore } from './store/planMemory';
 import { ScanManager } from './scan/scan';
 
 export interface BuildAppOptions {
   store: ScenarioStore;
+  planStore?: DailyPlanStore;
   scanManager?: ScanManager;
   logger?: FastifyServerOptions['logger'];
 }
 
 export interface AppContext {
   store: ScenarioStore;
+  plans: DailyPlanStore;
   scans: ScanManager;
 }
 
 /**
  * Build the Fastify application. The web layer is only an adapter: all
- * formulas live in src/timing and the scan loop in src/scan, so route code
- * never contains timing math.
+ * formulas live in src/timing, the day-plan orchestration in src/plan, the
+ * transition walk in src/transition and the scan loop in src/scan, so route
+ * code never contains timing math.
  */
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
-  const app = Fastify({ logger: opts.logger ?? false });  const context: AppContext = {
+  const app = Fastify({ logger: opts.logger ?? false });
+  const context: AppContext = {
     store: opts.store,
+    plans: opts.planStore ?? new MemoryDailyPlanStore(),
     scans: opts.scanManager ?? new ScanManager(),
   };
   app.decorate('ctx', context);
@@ -57,6 +65,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   await app.register(timingRoutes);
   await app.register(scanRoutes);
   await app.register(scenarioRoutes);
+  await app.register(planRoutes);
 
   return app;
 }

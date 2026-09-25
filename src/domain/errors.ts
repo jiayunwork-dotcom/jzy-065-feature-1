@@ -19,7 +19,17 @@ export type ErrorCode =
   | 'GREEN_BALANCE_RESIDUAL'
   | 'NOT_FOUND'
   | 'SCAN_NOT_FOUND'
-  | 'SCAN_NOT_RUNNING';
+  | 'SCAN_NOT_RUNNING'
+  // Daily-plan time-of-day schedule (structural problems, rejected before solving)
+  | 'INVALID_PLAN'
+  | 'INVALID_CLOCK'
+  | 'INVALID_TIME_RANGE'
+  | 'SEGMENT_GAP'
+  | 'SEGMENT_OVERLAP'
+  | 'DAY_NOT_COVERED'
+  | 'INVALID_SEGMENT_FLOW'
+  | 'INVALID_CYCLE_ADJUSTMENT'
+  | 'TRANSITION_TOO_MANY_STEPS';
 
 const HTTP_STATUS: Record<ErrorCode, number> = {
   INVALID_REQUEST: 400,
@@ -38,6 +48,15 @@ const HTTP_STATUS: Record<ErrorCode, number> = {
   NOT_FOUND: 404,
   SCAN_NOT_FOUND: 404,
   SCAN_NOT_RUNNING: 409,
+  INVALID_PLAN: 400,
+  INVALID_CLOCK: 400,
+  INVALID_TIME_RANGE: 400,
+  SEGMENT_GAP: 400,
+  SEGMENT_OVERLAP: 400,
+  DAY_NOT_COVERED: 400,
+  INVALID_SEGMENT_FLOW: 400,
+  INVALID_CYCLE_ADJUSTMENT: 400,
+  TRANSITION_TOO_MANY_STEPS: 400,
 };
 
 export interface ErrorDetail {
